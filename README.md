@@ -1,3 +1,12 @@
+# Fork of MessagePack for Cete
+
+Orignal [MessagePack implementation](https://github.com/vmihailenco/msgpack) and [Cete](https://github.com/1lann/cete).
+
+Changes:
+
+- Adds transparent key compression
+- Change struct tags to `cete:"field_name"`
+
 # MessagePack encoding for Golang
 
 [![Build Status](https://travis-ci.org/1lann/msgpack.svg?branch=v2)](https://travis-ci.org/1lann/msgpack)

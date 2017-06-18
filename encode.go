@@ -35,12 +35,27 @@ func Marshal(v ...interface{}) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+// MarshalCompressed returns the MessagePack with key compression encoding of v.
+func MarshalCompressed(keysToCompressed map[string]string,
+	keyGenerator func(string) (string, error),
+	v ...interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf)
+	enc.keysToCompressed = keysToCompressed
+	enc.keyGenerator = keyGenerator
+	err := enc.Encode(v...)
+
+	return buf.Bytes(), err
+}
+
 type Encoder struct {
 	w   writer
 	buf []byte
 
-	sortMapKeys   bool
 	structAsArray bool
+
+	keysToCompressed map[string]string
+	keyGenerator     func(string) (string, error)
 }
 
 func NewEncoder(w io.Writer) *Encoder {
@@ -58,10 +73,10 @@ func NewEncoder(w io.Writer) *Encoder {
 // Supported map types are:
 //   - map[string]string
 //   - map[string]interface{}
-func (e *Encoder) SortMapKeys(v bool) *Encoder {
-	e.sortMapKeys = v
-	return e
-}
+// func (e *Encoder) SortMapKeys(v bool) *Encoder {
+// 	e.sortMapKeys = v
+// 	return e
+// }
 
 // StructAsArray causes the Encoder to encode Go structs as MessagePack arrays.
 func (e *Encoder) StructAsArray(v bool) *Encoder {

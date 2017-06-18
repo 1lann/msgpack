@@ -136,7 +136,7 @@ func ExampleEncoder_StructAsArray() {
 
 func ExampleMarshal_asArray() {
 	type Item struct {
-		_msgpack struct{} `msgpack:",asArray"`
+		_msgpack struct{} `cete:",asArray"`
 		Foo      string
 		Bar      string
 	}

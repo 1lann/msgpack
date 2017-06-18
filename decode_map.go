@@ -73,6 +73,38 @@ func decodeMap(d *Decoder) (interface{}, error) {
 	return m, nil
 }
 
+func decodeCompressedMap(compressedToKey map[string]string) func(d *Decoder) (interface{}, error) {
+	return func(d *Decoder) (interface{}, error) {
+		n, err := d.DecodeMapLen()
+		if err != nil {
+			return nil, err
+		}
+		if n == -1 {
+			return nil, nil
+		}
+
+		m := make(map[string]interface{}, min(n, mapElemsAllocLimit))
+		for i := 0; i < n; i++ {
+			mck, err := d.DecodeString()
+			if err != nil {
+				return nil, err
+			}
+			mv, err := d.DecodeInterface()
+			if err != nil {
+				return nil, err
+			}
+
+			mk, found := compressedToKey[mck]
+			if !found {
+				mk = mck
+			}
+
+			m[mk] = mv
+		}
+		return m, nil
+	}
+}
+
 func (d *Decoder) DecodeMapLen() (int, error) {
 	c, err := d.readByte()
 	if err != nil {

@@ -16,7 +16,26 @@ func encodeMapValue(e *Encoder, v reflect.Value) error {
 		return err
 	}
 
+	compressable := false
+	if reflect.TypeOf(v).Key().Kind() == reflect.String {
+		compressable = e.keysToCompressed != nil
+	}
+
 	for _, key := range v.MapKeys() {
+		if compressable {
+			k := key.String()
+			newKey, found := e.keysToCompressed[k]
+			if !found {
+				keyValue, err := e.keyGenerator(k)
+				if err != nil {
+					return err
+				}
+				key = reflect.ValueOf(keyValue)
+			} else {
+				key = reflect.ValueOf(newKey)
+			}
+		}
+
 		if err := e.EncodeValue(key); err != nil {
 			return err
 		}
@@ -38,14 +57,33 @@ func encodeMapStringStringValue(e *Encoder, v reflect.Value) error {
 	}
 
 	m := v.Convert(mapStringStringType).Interface().(map[string]string)
-	if e.sortMapKeys {
-		return e.encodeSortedMapStringString(m)
+	// if e.sortMapKeys {
+	// 	return e.encodeSortedMapStringString(m)
+	// }
+
+	compressable := false
+	if e.keysToCompressed != nil {
+		compressable = true
 	}
 
+	var err error
 	for mk, mv := range m {
+		if compressable {
+			newKey, found := e.keysToCompressed[mk]
+			if !found {
+				mk, err = e.keyGenerator(mk)
+				if err != nil {
+					return err
+				}
+			} else {
+				mk = newKey
+			}
+		}
+
 		if err := e.EncodeString(mk); err != nil {
 			return err
 		}
+
 		if err := e.EncodeString(mv); err != nil {
 			return err
 		}
@@ -64,11 +102,29 @@ func encodeMapStringInterfaceValue(e *Encoder, v reflect.Value) error {
 	}
 
 	m := v.Convert(mapStringInterfaceType).Interface().(map[string]interface{})
-	if e.sortMapKeys {
-		return e.encodeSortedMapStringInterface(m)
+	// if e.sortMapKeys {
+	// 	return e.encodeSortedMapStringInterface(m)
+	// }
+
+	compressable := false
+	if e.keysToCompressed != nil {
+		compressable = true
 	}
 
+	var err error
 	for mk, mv := range m {
+		if compressable {
+			newKey, found := e.keysToCompressed[mk]
+			if !found {
+				mk, err = e.keyGenerator(mk)
+				if err != nil {
+					return err
+				}
+			} else {
+				mk = newKey
+			}
+		}
+
 		if err := e.EncodeString(mk); err != nil {
 			return err
 		}

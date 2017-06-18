@@ -141,7 +141,7 @@ func getFields(typ reflect.Type) *fields {
 	for i := 0; i < numField; i++ {
 		f := typ.Field(i)
 
-		name, opt := parseTag(f.Tag.Get("msgpack"))
+		name, opt := parseTag(f.Tag.Get("cete"))
 		if name == "-" {
 			continue
 		}
