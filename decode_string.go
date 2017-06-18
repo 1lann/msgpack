@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/vmihailenco/msgpack/codes"
+	"github.com/1lann/msgpack/codes"
 )
 
 func (d *Decoder) bytesLen(c byte) (int, error) {
