@@ -9,9 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"gopkg.in/vmihailenco/msgpack.v2"
-	"gopkg.in/vmihailenco/msgpack.v2/codes"
-
+	"github.com/1lann/msgpack"
+	"github.com/1lann/msgpack/codes"
 	. "gopkg.in/check.v1"
 )
 

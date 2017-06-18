@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"time"
 
-	"gopkg.in/vmihailenco/msgpack.v2/codes"
+	"github.com/1lann/msgpack/codes"
 )
 
 type writer interface {

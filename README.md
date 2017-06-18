@@ -1,29 +1,32 @@
 # MessagePack encoding for Golang
 
-[![Build Status](https://travis-ci.org/vmihailenco/msgpack.svg?branch=v2)](https://travis-ci.org/vmihailenco/msgpack)
-[![GoDoc](https://godoc.org/github.com/vmihailenco/msgpack?status.svg)](https://godoc.org/github.com/vmihailenco/msgpack)
+[![Build Status](https://travis-ci.org/1lann/msgpack.svg?branch=v2)](https://travis-ci.org/1lann/msgpack)
+[![GoDoc](https://godoc.org/github.com/1lann/msgpack?status.svg)](https://godoc.org/github.com/1lann/msgpack)
 
 Supports:
 - Primitives, arrays, maps, structs, time.Time and interface{}.
 - Appengine *datastore.Key and datastore.Cursor.
-- [CustomEncoder](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#example-CustomEncoder)/CustomDecoder interfaces for custom encoding.
-- [Extensions](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#example-RegisterExt) to encode type information.
-- Renaming fields via `msgpack:"my_field_name"`.
-- Inlining struct fields via `msgpack:",inline"`.
-- Omitting empty fields via `msgpack:",omitempty"`.
-- [Map keys sorting](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#Encoder.SortMapKeys).
-- Encoding/decoding all [structs as arrays](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#Encoder.StructAsArray) or [individual structs](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#example-Marshal--AsArray).
-- Simple but very fast and efficient [queries](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#example-Decoder-Query).
+- [Map keys sorting](https://godoc.org/github.com/1lann/msgpack#Encoder.SortMapKeys).
+- Encoding/decoding all [structs as arrays](https://godoc.org/github.com/1lann/msgpack#Encoder.StructAsArray) or [individual structs](https://godoc.org/github.com/1lann/msgpack#example-Marshal--AsArray).
+- Simple but very fast and efficient [queries](https://godoc.org/github.com/1lann/msgpack#example-Decoder-Query).
 
-API docs: https://godoc.org/gopkg.in/vmihailenco/msgpack.v2.
-Examples: https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#pkg-examples.
+API docs: https://godoc.org/github.com/1lann/msgpack.
+Examples: https://godoc.org/github.com/1lann/msgpack#pkg-examples.
+=======
+- [Map keys sorting](https://godoc.org/github.com/1lann/msgpack#Encoder.SortMapKeys).
+- Encoding/decoding all [structs as arrays](https://godoc.org/github.com/1lann/msgpack#Encoder.StructAsArray) or [individual structs](https://godoc.org/github.com/1lann/msgpack#example-Marshal--AsArray).
+- Simple but very fast and efficient [queries](https://godoc.org/github.com/1lann/msgpack#example-Decoder-Query).
+
+API docs: https://godoc.org/github.com/1lann/msgpack.
+Examples: https://godoc.org/github.com/1lann/msgpack#pkg-examples.
+>>>>>>> b758422... Change paths to point to fork
 
 ## Installation
 
 Install:
 
 ```shell
-go get gopkg.in/vmihailenco/msgpack.v2
+go get -u github.com/1lann/msgpack
 ```
 
 ## Quickstart
@@ -61,7 +64,7 @@ BenchmarkStructGOB-4                  	   10000	    104331 ns/op	   14664 B/op	 
 
 ## Howto
 
-Please go through [examples](https://godoc.org/gopkg.in/vmihailenco/msgpack.v2#pkg-examples) to get an idea how to use this package.
+Please go through [examples](https://godoc.org/github.com/1lann/msgpack#pkg-examples) to get an idea how to use this package.
 
 ## See also
 
