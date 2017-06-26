@@ -42,12 +42,17 @@ func (d *Decoder) Query(query string) ([]interface{}, error) {
 
 // QueryCompressed queries data which has key compression by converting the
 // query to use the compressed keys.
-func (d *Decoder) QueryCompressed(keyToCompressed map[string]string,
+func (d *Decoder) QueryCompressed(
+	keyToCompressed func(string, ...bool) (string, error),
 	query string) ([]interface{}, error) {
 
 	parts := strings.Split(query, ".")
 	for i, part := range parts {
-		if value, found := keyToCompressed[part]; found {
+		if strings.ContainsAny(part, "*") {
+			continue
+		}
+
+		if value, err := keyToCompressed(part, true); err == nil {
 			parts[i] = value
 		}
 	}

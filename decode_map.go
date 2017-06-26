@@ -33,10 +33,18 @@ func decodeMapValue(d *Decoder, v reflect.Value) error {
 	keyType := typ.Key()
 	valueType := typ.Elem()
 
+	compressed := d.compressedToKey != nil
+
 	for i := 0; i < n; i++ {
 		mk := reflect.New(keyType).Elem()
 		if err := d.DecodeValue(mk); err != nil {
 			return err
+		}
+
+		if compressed {
+			if mk.Kind() == reflect.String {
+				mk = reflect.ValueOf(d.compressedToKey(mk.String()))
+			}
 		}
 
 		mv := reflect.New(valueType).Elem()
@@ -49,6 +57,7 @@ func decodeMapValue(d *Decoder, v reflect.Value) error {
 
 	return nil
 }
+
 func decodeMap(d *Decoder) (interface{}, error) {
 	n, err := d.DecodeMapLen()
 	if err != nil {
@@ -57,6 +66,8 @@ func decodeMap(d *Decoder) (interface{}, error) {
 	if n == -1 {
 		return nil, nil
 	}
+
+	compressed := d.compressedToKey != nil
 
 	m := make(map[interface{}]interface{}, min(n, mapElemsAllocLimit))
 	for i := 0; i < n; i++ {
@@ -68,41 +79,17 @@ func decodeMap(d *Decoder) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		if compressed {
+			mkStr, ok := mk.(string)
+			if ok {
+				mk = d.compressedToKey(mkStr)
+			}
+		}
+
 		m[mk] = mv
 	}
 	return m, nil
-}
-
-func decodeCompressedMap(compressedToKey map[string]string) func(d *Decoder) (interface{}, error) {
-	return func(d *Decoder) (interface{}, error) {
-		n, err := d.DecodeMapLen()
-		if err != nil {
-			return nil, err
-		}
-		if n == -1 {
-			return nil, nil
-		}
-
-		m := make(map[string]interface{}, min(n, mapElemsAllocLimit))
-		for i := 0; i < n; i++ {
-			mck, err := d.DecodeString()
-			if err != nil {
-				return nil, err
-			}
-			mv, err := d.DecodeInterface()
-			if err != nil {
-				return nil, err
-			}
-
-			mk, found := compressedToKey[mck]
-			if !found {
-				mk = mck
-			}
-
-			m[mk] = mv
-		}
-		return m, nil
-	}
 }
 
 func (d *Decoder) DecodeMapLen() (int, error) {
@@ -164,11 +151,18 @@ func (d *Decoder) decodeMapStringStringPtr(ptr *map[string]string) error {
 		m = *ptr
 	}
 
+	compressed := d.compressedToKey != nil
+
 	for i := 0; i < n; i++ {
 		mk, err := d.DecodeString()
 		if err != nil {
 			return err
 		}
+
+		if compressed {
+			mk = d.compressedToKey(mk)
+		}
+
 		mv, err := d.DecodeString()
 		if err != nil {
 			return err
@@ -200,11 +194,18 @@ func (d *Decoder) decodeMapStringInterfacePtr(ptr *map[string]interface{}) error
 		m = *ptr
 	}
 
+	compressed := d.compressedToKey != nil
+
 	for i := 0; i < n; i++ {
 		mk, err := d.DecodeString()
 		if err != nil {
 			return err
 		}
+
+		if compressed {
+			mk = d.compressedToKey(mk)
+		}
+
 		mv, err := d.DecodeInterface()
 		if err != nil {
 			return err
@@ -277,11 +278,18 @@ func decodeStructValue(d *Decoder, strct reflect.Value) error {
 		return nil
 	}
 
+	compressed := d.compressedToKey != nil
+
 	for i := 0; i < n; i++ {
 		name, err := d.DecodeString()
 		if err != nil {
 			return err
 		}
+
+		if compressed {
+			name = d.compressedToKey(name)
+		}
+
 		if f := fields.Table[name]; f != nil {
 			if err := f.DecodeValue(d, strct); err != nil {
 				return err

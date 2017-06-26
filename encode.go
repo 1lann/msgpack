@@ -36,13 +36,11 @@ func Marshal(v ...interface{}) ([]byte, error) {
 }
 
 // MarshalCompressed returns the MessagePack with key compression encoding of v.
-func MarshalCompressed(keysToCompressed map[string]string,
-	keyGenerator func(string) (string, error),
+func MarshalCompressed(keysToCompressed func(string, ...bool) (string, error),
 	v ...interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := NewEncoder(&buf)
 	enc.keysToCompressed = keysToCompressed
-	enc.keyGenerator = keyGenerator
 	err := enc.Encode(v...)
 
 	return buf.Bytes(), err
@@ -54,8 +52,7 @@ type Encoder struct {
 
 	structAsArray bool
 
-	keysToCompressed map[string]string
-	keyGenerator     func(string) (string, error)
+	keysToCompressed func(key string, generate ...bool) (string, error)
 }
 
 func NewEncoder(w io.Writer) *Encoder {

@@ -40,14 +40,17 @@ func Unmarshal(data []byte, v ...interface{}) error {
 // UnmarshalCompressed decodes the MessagePack-encoded data using the
 // provided key compression map and stores the result in the value pointed to
 // by v.
-func UnmarshalCompressed(compressedToKey map[string]string,
+func UnmarshalCompressed(compressedToKey func(string) string,
 	data []byte, v ...interface{}) error {
-	return NewCompressedDecoder(compressedToKey,
-		bytes.NewReader(data)).Decode(v...)
+	dec := NewDecoder(bytes.NewReader(data))
+	dec.compressedToKey = compressedToKey
+	return dec.Decode(v...)
 }
 
 type Decoder struct {
 	DecodeMapFunc func(*Decoder) (interface{}, error)
+
+	compressedToKey func(string) string
 
 	r   bufReader
 	buf []byte
@@ -65,13 +68,13 @@ func NewDecoder(r io.Reader) *Decoder {
 	}
 }
 
-func NewCompressedDecoder(compressedToKey map[string]string,
+func NewCompressedDecoder(compressedToKey func(string) string,
 	r io.Reader) *Decoder {
 	return &Decoder{
-		DecodeMapFunc: decodeCompressedMap(compressedToKey),
-
-		r:   newBufReader(r),
-		buf: makeBuffer(),
+		DecodeMapFunc:   decodeMap,
+		compressedToKey: compressedToKey,
+		r:               newBufReader(r),
+		buf:             makeBuffer(),
 	}
 }
 
