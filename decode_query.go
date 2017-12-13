@@ -54,6 +54,9 @@ func (d *Decoder) QueryCompressed(
 
 		if value, err := keyToCompressed(part, true); err == nil {
 			parts[i] = value
+		} else {
+			// Key does not exist, no possible results
+			return nil, nil
 		}
 	}
 
