@@ -40,7 +40,7 @@ func Unmarshal(data []byte, v interface{}) error {
 // provided key compression map and stores the result in the value pointed to
 // by v.
 func UnmarshalCompressed(compressedToKey func(string) string,
-	data []byte, v ...interface{}) error {
+	data []byte, v interface{}) error {
 	return NewCompressedDecoder(compressedToKey, bytes.NewReader(data)).Decode(v)
 }
 
