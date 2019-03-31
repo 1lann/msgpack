@@ -42,6 +42,17 @@ func (w *byteWriter) WriteString(s string) (int, error) {
 	return w.Write(w.buf)
 }
 
+// MarshalCompressed returns the MessagePack with key compression encoding of v.
+func MarshalCompressed(keysToCompressed func(string, ...bool) (string, error),
+	v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf)
+	enc.keysToCompressed = keysToCompressed
+	err := enc.Encode(v)
+
+	return buf.Bytes(), err
+}
+
 // Marshal returns the MessagePack encoding of v.
 func Marshal(v interface{}) ([]byte, error) {
 	var buf bytes.Buffer
@@ -59,6 +70,8 @@ type Encoder struct {
 	// buf can't be reused for time encoding, as buf is used
 	// to encode msgpack extLen
 	timeBuf []byte
+
+	keysToCompressed func(key string, generate ...bool) (string, error)
 
 	sortMapKeys   bool
 	structAsArray bool
