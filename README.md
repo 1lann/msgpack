@@ -9,10 +9,11 @@ Supports:
 - [CustomEncoder](https://godoc.org/github.com/1lann/msgpack#example-CustomEncoder)/CustomDecoder interfaces for custom encoding.
 - [Extensions](https://godoc.org/github.com/1lann/msgpack#example-RegisterExt) to encode type information.
 - Renaming fields via `msgpack:"my_field_name"`.
-- Omitting empty fields via `msgpack:",omitempty"`.
-- [Map keys sorting](https://godoc.org/github.com/1lann/msgpack#Encoder.SortMapKeys).
-- Encoding/decoding all [structs as arrays](https://godoc.org/github.com/1lann/msgpack#Encoder.StructAsArray) or [individual structs](https://godoc.org/github.com/1lann/msgpack#example-Marshal--AsArray).
-- Simple but very fast and efficient [queries](https://godoc.org/github.com/1lann/msgpack#example-Decoder-Query).
+- Omitting individual empty fields via `msgpack:",omitempty"` tag or all [empty fields in a struct](https://godoc.org/github.com/vmihailenco/msgpack#example-Marshal--OmitEmpty).
+- [Map keys sorting](https://godoc.org/github.com/vmihailenco/msgpack#Encoder.SortMapKeys).
+- Encoding/decoding all [structs as arrays](https://godoc.org/github.com/vmihailenco/msgpack#Encoder.StructAsArray) or [individual structs](https://godoc.org/github.com/vmihailenco/msgpack#example-Marshal--AsArray).
+- [Encoder.UseJSONTag](https://godoc.org/github.com/vmihailenco/msgpack#Encoder.UseJSONTag) with [Decoder.UseJSONTag](https://godoc.org/github.com/vmihailenco/msgpack#Decoder.UseJSONTag) can turn msgpack into drop-in replacement for JSON.
+- Simple but very fast and efficient [queries](https://godoc.org/github.com/vmihailenco/msgpack#example-Decoder-Query).
 
 API docs: https://godoc.org/github.com/1lann/msgpack.
 Examples: https://godoc.org/github.com/1lann/msgpack#pkg-examples.

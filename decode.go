@@ -15,9 +15,8 @@ import (
 const bytesAllocLimit = 1024 * 1024 // 1mb
 
 type bufReader interface {
-	Read([]byte) (int, error)
-	ReadByte() (byte, error)
-	UnreadByte() error
+	io.Reader
+	io.ByteScanner
 }
 
 func newBufReader(r io.Reader) bufReader {
@@ -33,50 +32,69 @@ func makeBuffer() []byte {
 
 // Unmarshal decodes the MessagePack-encoded data and stores the result
 // in the value pointed to by v.
-func Unmarshal(data []byte, v ...interface{}) error {
-	return NewDecoder(bytes.NewReader(data)).Decode(v...)
+func Unmarshal(data []byte, v interface{}) error {
+	return NewDecoder(bytes.NewReader(data)).Decode(v)
 }
 
 type Decoder struct {
-	r   bufReader
+	r   io.Reader
+	s   io.ByteScanner
 	buf []byte
 
 	extLen int
 	rec    []byte // accumulates read data if not nil
 
+	useLoose   bool
+	useJSONTag bool
+
 	decodeMapFunc func(*Decoder) (interface{}, error)
 }
 
+// NewDecoder returns a new decoder that reads from r.
+//
+// The decoder introduces its own buffering and may read data from r
+// beyond the MessagePack values requested. Buffering can be disabled
+// by passing a reader that implements io.ByteScanner interface.
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{
-		decodeMapFunc: decodeMap,
-
-		r:   newBufReader(r),
+	d := &Decoder{
 		buf: makeBuffer(),
 	}
+	d.resetReader(r)
+	return d
 }
 
 func (d *Decoder) SetDecodeMapFunc(fn func(*Decoder) (interface{}, error)) {
 	d.decodeMapFunc = fn
 }
 
+// UseDecodeInterfaceLoose causes decoder to use DecodeInterfaceLoose
+// to decode msgpack value into Go interface{}.
+func (d *Decoder) UseDecodeInterfaceLoose(flag bool) *Decoder {
+	d.useLoose = flag
+	return d
+}
+
+// UseJSONTag causes the Decoder to use json struct tag as fallback option
+// if there is no msgpack tag.
+func (d *Decoder) UseJSONTag(v bool) *Decoder {
+	d.useJSONTag = v
+	return d
+}
+
 func (d *Decoder) Reset(r io.Reader) error {
-	d.r = newBufReader(r)
+	d.resetReader(r)
 	return nil
 }
 
-func (d *Decoder) Decode(v ...interface{}) error {
-	for _, vv := range v {
-		if err := d.decode(vv); err != nil {
-			return err
-		}
-	}
-	return nil
+func (d *Decoder) resetReader(r io.Reader) {
+	reader := newBufReader(r)
+	d.r = reader
+	d.s = reader
 }
 
-func (d *Decoder) decode(dst interface{}) error {
+func (d *Decoder) Decode(v interface{}) error {
 	var err error
-	switch v := dst.(type) {
+	switch v := v.(type) {
 	case *string:
 		if v != nil {
 			*v, err = d.DecodeString()
@@ -170,18 +188,34 @@ func (d *Decoder) decode(dst interface{}) error {
 		}
 	}
 
-	v := reflect.ValueOf(dst)
-	if !v.IsValid() {
+	vv := reflect.ValueOf(v)
+	if !vv.IsValid() {
 		return errors.New("msgpack: Decode(nil)")
 	}
-	if v.Kind() != reflect.Ptr {
-		return fmt.Errorf("msgpack: Decode(nonsettable %T)", dst)
+	if vv.Kind() != reflect.Ptr {
+		return fmt.Errorf("msgpack: Decode(nonsettable %T)", v)
 	}
-	v = v.Elem()
-	if !v.IsValid() {
-		return fmt.Errorf("msgpack: Decode(nonsettable %T)", dst)
+	vv = vv.Elem()
+	if !vv.IsValid() {
+		return fmt.Errorf("msgpack: Decode(nonsettable %T)", v)
 	}
-	return d.DecodeValue(v)
+	return d.DecodeValue(vv)
+}
+
+func (d *Decoder) DecodeMulti(v ...interface{}) error {
+	for _, vv := range v {
+		if err := d.Decode(vv); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Decoder) decodeInterfaceCond() (interface{}, error) {
+	if d.useLoose {
+		return d.DecodeInterfaceLoose()
+	}
+	return d.DecodeInterface()
 }
 
 func (d *Decoder) DecodeValue(v reflect.Value) error {
@@ -190,7 +224,7 @@ func (d *Decoder) DecodeValue(v reflect.Value) error {
 }
 
 func (d *Decoder) DecodeNil() error {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return err
 	}
@@ -213,14 +247,14 @@ func (d *Decoder) decodeNilValue(v reflect.Value) error {
 }
 
 func (d *Decoder) DecodeBool() (bool, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return false, err
 	}
 	return d.bool(c)
 }
 
-func (d *Decoder) bool(c byte) (bool, error) {
+func (d *Decoder) bool(c codes.Code) (bool, error) {
 	if c == codes.False {
 		return false, nil
 	}
@@ -230,35 +264,22 @@ func (d *Decoder) bool(c byte) (bool, error) {
 	return false, fmt.Errorf("msgpack: invalid code=%x decoding bool", c)
 }
 
-func (d *Decoder) interfaceValue(v reflect.Value) error {
-	vv, err := d.DecodeInterface()
-	if err != nil {
-		return err
-	}
-	if vv != nil {
-		if v.Type() == errorType {
-			if vv, ok := vv.(string); ok {
-				v.Set(reflect.ValueOf(errors.New(vv)))
-				return nil
-			}
-		}
-
-		v.Set(reflect.ValueOf(vv))
-	}
-	return nil
-}
-
-// DecodeInterface decodes value into interface. Possible value types are:
+// DecodeInterface decodes value into interface. It returns following types:
 //   - nil,
 //   - bool,
 //   - int8, int16, int32, int64,
 //   - uint8, uint16, uint32, uint64,
 //   - float32 and float64,
 //   - string,
+//   - []byte,
 //   - slices of any of the above,
 //   - maps of any of the above.
+//
+// DecodeInterface should be used only when you don't know the type of value
+// you are decoding. For example, if you are decoding number it is better to use
+// DecodeInt64 for negative numbers and DecodeUint64 for positive numbers.
 func (d *Decoder) DecodeInterface() (interface{}, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +288,10 @@ func (d *Decoder) DecodeInterface() (interface{}, error) {
 		return int8(c), nil
 	}
 	if codes.IsFixedMap(c) {
-		d.r.UnreadByte()
+		err = d.s.UnreadByte()
+		if err != nil {
+			return nil, err
+		}
 		return d.DecodeMap()
 	}
 	if codes.IsFixedArray(c) {
@@ -309,11 +333,72 @@ func (d *Decoder) DecodeInterface() (interface{}, error) {
 	case codes.Array16, codes.Array32:
 		return d.decodeSlice(c)
 	case codes.Map16, codes.Map32:
-		d.r.UnreadByte()
+		err = d.s.UnreadByte()
+		if err != nil {
+			return nil, err
+		}
 		return d.DecodeMap()
 	case codes.FixExt1, codes.FixExt2, codes.FixExt4, codes.FixExt8, codes.FixExt16,
 		codes.Ext8, codes.Ext16, codes.Ext32:
-		return d.ext(c)
+		return d.extInterface(c)
+	}
+
+	return 0, fmt.Errorf("msgpack: unknown code %x decoding interface{}", c)
+}
+
+// DecodeInterfaceLoose is like DecodeInterface except that:
+//   - int8, int16, and int32 are converted to int64,
+//   - uint8, uint16, and uint32 are converted to uint64,
+//   - float32 is converted to float64.
+func (d *Decoder) DecodeInterfaceLoose() (interface{}, error) {
+	c, err := d.readCode()
+	if err != nil {
+		return nil, err
+	}
+
+	if codes.IsFixedNum(c) {
+		return int64(c), nil
+	}
+	if codes.IsFixedMap(c) {
+		err = d.s.UnreadByte()
+		if err != nil {
+			return nil, err
+		}
+		return d.DecodeMap()
+	}
+	if codes.IsFixedArray(c) {
+		return d.decodeSlice(c)
+	}
+	if codes.IsFixedString(c) {
+		return d.string(c)
+	}
+
+	switch c {
+	case codes.Nil:
+		return nil, nil
+	case codes.False, codes.True:
+		return d.bool(c)
+	case codes.Float, codes.Double:
+		return d.float64(c)
+	case codes.Uint8, codes.Uint16, codes.Uint32, codes.Uint64:
+		return d.uint(c)
+	case codes.Int8, codes.Int16, codes.Int32, codes.Int64:
+		return d.int(c)
+	case codes.Bin8, codes.Bin16, codes.Bin32:
+		return d.bytes(c, nil)
+	case codes.Str8, codes.Str16, codes.Str32:
+		return d.string(c)
+	case codes.Array16, codes.Array32:
+		return d.decodeSlice(c)
+	case codes.Map16, codes.Map32:
+		err = d.s.UnreadByte()
+		if err != nil {
+			return nil, err
+		}
+		return d.DecodeMap()
+	case codes.FixExt1, codes.FixExt2, codes.FixExt4, codes.FixExt8, codes.FixExt16,
+		codes.Ext8, codes.Ext16, codes.Ext32:
+		return d.extInterface(c)
 	}
 
 	return 0, fmt.Errorf("msgpack: unknown code %x decoding interface{}", c)
@@ -321,7 +406,7 @@ func (d *Decoder) DecodeInterface() (interface{}, error) {
 
 // Skip skips next value.
 func (d *Decoder) Skip() error {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return err
 	}
@@ -355,21 +440,22 @@ func (d *Decoder) Skip() error {
 		return d.skipSlice(c)
 	case codes.Map16, codes.Map32:
 		return d.skipMap(c)
-	case codes.FixExt1, codes.FixExt2, codes.FixExt4, codes.FixExt8, codes.FixExt16, codes.Ext8, codes.Ext16, codes.Ext32:
+	case codes.FixExt1, codes.FixExt2, codes.FixExt4, codes.FixExt8, codes.FixExt16,
+		codes.Ext8, codes.Ext16, codes.Ext32:
 		return d.skipExt(c)
 	}
 
 	return fmt.Errorf("msgpack: unknown code %x", c)
 }
 
-// peekCode returns next MessagePack code. See
-// https://github.com/msgpack/msgpack/blob/master/spec.md#formats for details.
-func (d *Decoder) PeekCode() (code byte, err error) {
-	code, err = d.r.ReadByte()
+// PeekCode returns the next MessagePack code without advancing the reader.
+// Subpackage msgpack/codes contains list of available codes.
+func (d *Decoder) PeekCode() (codes.Code, error) {
+	c, err := d.s.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	return code, d.r.UnreadByte()
+	return codes.Code(c), d.s.UnreadByte()
 }
 
 func (d *Decoder) hasNilCode() bool {
@@ -377,15 +463,16 @@ func (d *Decoder) hasNilCode() bool {
 	return err == nil && code == codes.Nil
 }
 
-func (d *Decoder) readByte() (byte, error) {
-	c, err := d.r.ReadByte()
+func (d *Decoder) readCode() (codes.Code, error) {
+	d.extLen = 0
+	c, err := d.s.ReadByte()
 	if err != nil {
 		return 0, err
 	}
 	if d.rec != nil {
 		d.rec = append(d.rec, c)
 	}
-	return c, nil
+	return codes.Code(c), nil
 }
 
 func (d *Decoder) readFull(b []byte) error {
@@ -412,11 +499,18 @@ func (d *Decoder) readN(n int) ([]byte, error) {
 }
 
 func readN(r io.Reader, b []byte, n int) ([]byte, error) {
-	if n == 0 && b == nil {
-		return make([]byte, 0), nil
+	if b == nil {
+		if n == 0 {
+			return make([]byte, 0), nil
+		}
+		if n <= bytesAllocLimit {
+			b = make([]byte, n)
+		} else {
+			b = make([]byte, bytesAllocLimit)
+		}
 	}
 
-	if cap(b) >= n {
+	if n <= cap(b) {
 		b = b[:n]
 		_, err := io.ReadFull(r, b)
 		return b, err
@@ -424,18 +518,21 @@ func readN(r io.Reader, b []byte, n int) ([]byte, error) {
 	b = b[:cap(b)]
 
 	var pos int
-	for len(b) < n {
-		diff := n - len(b)
-		if diff > bytesAllocLimit {
-			diff = bytesAllocLimit
+	for {
+		alloc := n - len(b)
+		if alloc > bytesAllocLimit {
+			alloc = bytesAllocLimit
 		}
-		b = append(b, make([]byte, diff)...)
+		b = append(b, make([]byte, alloc)...)
 
 		_, err := io.ReadFull(r, b[pos:])
 		if err != nil {
 			return nil, err
 		}
 
+		if len(b) == n {
+			break
+		}
 		pos = len(b)
 	}
 

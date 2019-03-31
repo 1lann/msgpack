@@ -31,6 +31,24 @@ func (o *Object) UnmarshalMsgpack(b []byte) error {
 
 //------------------------------------------------------------------------------
 
+type CustomTime time.Time
+
+func (t CustomTime) EncodeMsgpack(enc *msgpack.Encoder) error {
+	return enc.Encode(time.Time(t))
+}
+
+func (t *CustomTime) DecodeMsgpack(dec *msgpack.Decoder) error {
+	var tm time.Time
+	err := dec.Decode(&tm)
+	if err != nil {
+		return err
+	}
+	*t = CustomTime(tm)
+	return nil
+}
+
+//------------------------------------------------------------------------------
+
 type IntSet map[int]struct{}
 
 var _ msgpack.CustomEncoder = (*IntSet)(nil)
@@ -78,15 +96,47 @@ func (s *CustomEncoder) EncodeMsgpack(enc *msgpack.Encoder) error {
 	if s == nil {
 		return enc.EncodeNil()
 	}
-	return enc.Encode(s.str, s.ref, s.num)
+	return enc.EncodeMulti(s.str, s.ref, s.num)
 }
 
 func (s *CustomEncoder) DecodeMsgpack(dec *msgpack.Decoder) error {
-	return dec.Decode(&s.str, &s.ref, &s.num)
+	return dec.DecodeMulti(&s.str, &s.ref, &s.num)
 }
 
 type CustomEncoderField struct {
 	Field CustomEncoder
+}
+
+//------------------------------------------------------------------------------
+
+type JSONFallbackTest struct {
+	Foo string `json:"foo,omitempty"`
+	Bar string `json:",omitempty" msgpack:"bar"`
+}
+
+func TestUseJsonTag(t *testing.T) {
+	var buf bytes.Buffer
+
+	enc := msgpack.NewEncoder(&buf).UseJSONTag(true)
+	in := &JSONFallbackTest{Foo: "hello", Bar: "world"}
+	err := enc.Encode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dec := msgpack.NewDecoder(&buf).UseJSONTag(true)
+	out := new(JSONFallbackTest)
+	err = dec.Decode(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if out.Foo != in.Foo {
+		t.Fatalf("got %q, wanted %q", out.Foo, in.Foo)
+	}
+	if out.Bar != in.Bar {
+		t.Fatalf("got %q, wanted %q", out.Foo, in.Foo)
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -100,10 +150,29 @@ type InlineTest struct {
 	OmitEmptyTest
 }
 
+type InlinePtrTest struct {
+	*OmitEmptyTest
+}
+
+type FooTest struct {
+	Foo string
+}
+
+type FooDupTest FooTest
+
+type InlineDupTest struct {
+	FooTest
+	FooDupTest
+}
+
 type AsArrayTest struct {
 	_msgpack struct{} `msgpack:",asArray"`
 
 	OmitEmptyTest
+}
+
+type ExtTestField struct {
+	ExtTest ExtTest
 }
 
 //------------------------------------------------------------------------------
@@ -134,8 +203,8 @@ var encoderTests = []encoderTest{
 	},
 
 	{(*Object)(nil), "c0"},
-	{&Object{}, "00"},
-	{&Object{42}, "2a"},
+	{&Object{}, "d30000000000000000"},
+	{&Object{42}, "d3000000000000002a"},
 	{[]*Object{nil, nil}, "92c0c0"},
 
 	{&CustomEncoder{}, "a0c000"},
@@ -148,15 +217,27 @@ var encoderTests = []encoderTest{
 	{&OmitEmptyTest{Foo: "hello"}, "81a3466f6fa568656c6c6f"},
 
 	{&InlineTest{OmitEmptyTest: OmitEmptyTest{Bar: "world"}}, "81a3426172a5776f726c64"},
+	{&InlinePtrTest{OmitEmptyTest: &OmitEmptyTest{Bar: "world"}}, "81a3426172a5776f726c64"},
 
 	{&AsArrayTest{}, "92a0a0"},
+
+	{&JSONFallbackTest{Foo: "hello"}, "82a3666f6fa568656c6c6fa3626172a0"},
+	{&JSONFallbackTest{Bar: "world"}, "81a3626172a5776f726c64"},
+	{&JSONFallbackTest{Foo: "hello", Bar: "world"}, "82a3666f6fa568656c6c6fa3626172a5776f726c64"},
 }
 
 func TestEncoder(t *testing.T) {
+	var buf bytes.Buffer
+	enc := msgpack.NewEncoder(&buf).
+		UseJSONTag(true).
+		SortMapKeys(true).
+		UseCompactEncoding(true)
+
 	for _, test := range encoderTests {
-		var buf bytes.Buffer
-		enc := msgpack.NewEncoder(&buf).SortMapKeys(true)
-		if err := enc.Encode(test.in); err != nil {
+		buf.Reset()
+
+		err := enc.Encode(test.in)
+		if err != nil {
 			t.Fatal(err)
 		}
 
@@ -176,10 +257,10 @@ type decoderTest struct {
 }
 
 var decoderTests = []decoderTest{
-	{b: []byte{codes.Bin32, 0x0f, 0xff, 0xff, 0xff}, out: new([]byte), err: "EOF"},
-	{b: []byte{codes.Str32, 0x0f, 0xff, 0xff, 0xff}, out: new([]byte), err: "EOF"},
-	{b: []byte{codes.Array32, 0x0f, 0xff, 0xff, 0xff}, out: new([]int), err: "EOF"},
-	{b: []byte{codes.Map32, 0x0f, 0xff, 0xff, 0xff}, out: new(map[int]int), err: "EOF"},
+	{b: []byte{byte(codes.Bin32), 0x0f, 0xff, 0xff, 0xff}, out: new([]byte), err: "EOF"},
+	{b: []byte{byte(codes.Str32), 0x0f, 0xff, 0xff, 0xff}, out: new([]byte), err: "EOF"},
+	{b: []byte{byte(codes.Array32), 0x0f, 0xff, 0xff, 0xff}, out: new([]int), err: "EOF"},
+	{b: []byte{byte(codes.Map32), 0x0f, 0xff, 0xff, 0xff}, out: new(map[int]int), err: "EOF"},
 }
 
 func TestDecoder(t *testing.T) {
@@ -204,15 +285,21 @@ type Exported struct {
 	Bar string
 }
 
-type EmbedingTest struct {
+type EmbeddingTest struct {
 	unexported
 	Exported
 }
 
-//------------------------------------------------------------------------------
+type EmbeddingPtrTest struct {
+	*Exported
+}
 
 type EmbeddedTime struct {
 	time.Time
+}
+
+type Interface struct {
+	Foo interface{}
 }
 
 type (
@@ -328,11 +415,13 @@ var (
 		{in: nil, out: new(map[int]int), wantnil: true},
 		{in: nil, out: &map[string]string{"foo": "bar"}, wantnil: true},
 		{in: nil, out: &map[int]int{1: 2}, wantnil: true},
+		{in: map[string]string(nil), out: new(map[string]string)},
 		{in: map[string]interface{}{"foo": nil}, out: new(map[string]interface{})},
 		{in: mapStringString{"foo": "bar"}, out: new(mapStringString)},
 		{in: map[stringAlias]stringAlias{"foo": "bar"}, out: new(map[stringAlias]stringAlias)},
 		{in: mapStringInterface{"foo": "bar"}, out: new(mapStringInterface)},
 		{in: map[stringAlias]interfaceAlias{"foo": "bar"}, out: new(map[stringAlias]interfaceAlias)},
+		{in: map[int]string{1: "string"}, out: new(map[int]string)},
 
 		{in: (*Object)(nil), out: new(*Object)},
 		{in: &Object{42}, out: new(Object)},
@@ -345,22 +434,33 @@ var (
 		{in: StructTest{sliceString{"foo", "bar"}, []string{"hello"}}, out: new(StructTest)},
 		{in: StructTest{sliceString{"foo", "bar"}, []string{"hello"}}, out: new(*StructTest)},
 
-		{in: EmbedingTest{}, out: new(EmbedingTest)},
-		{in: EmbedingTest{}, out: new(*EmbedingTest)},
+		{in: EmbeddingTest{}, out: new(EmbeddingTest)},
 		{
-			in: EmbedingTest{
+			in:     EmbeddingTest{},
+			out:    new(EmbeddingPtrTest),
+			wanted: EmbeddingPtrTest{Exported: new(Exported)},
+		},
+		{in: EmbeddingTest{}, out: new(*EmbeddingTest)},
+		{
+			in: EmbeddingTest{
 				unexported: unexported{Foo: "hello"},
 				Exported:   Exported{Bar: "world"},
 			},
-			out: new(EmbedingTest),
+			out: new(EmbeddingTest),
 		},
 
 		{in: time.Unix(0, 0), out: new(time.Time)},
 		{in: time.Unix(0, 1), out: new(time.Time)},
 		{in: time.Unix(1, 0), out: new(time.Time)},
 		{in: time.Unix(1, 1), out: new(time.Time)},
+		{
+			in:     time.Unix(0, 0).Format(time.RFC3339),
+			out:    new(time.Time),
+			wanted: mustParseTime(time.RFC3339, time.Unix(0, 0).Format(time.RFC3339)),
+		},
 		{in: EmbeddedTime{Time: time.Unix(1, 1)}, out: new(EmbeddedTime)},
 		{in: EmbeddedTime{Time: time.Unix(1, 1)}, out: new(*EmbeddedTime)},
+		{in: CustomTime(time.Unix(0, 0)), out: new(CustomTime)},
 
 		{in: nil, out: new(*CustomEncoder), wantnil: true},
 		{in: nil, out: &CustomEncoder{str: "a"}, wantzero: true},
@@ -390,6 +490,24 @@ var (
 
 		{in: (*ExtTest)(nil), out: new(*ExtTest)},
 		{in: &ExtTest{"world"}, out: new(ExtTest), wanted: ExtTest{"hello world"}},
+		{
+			in:     ExtTestField{ExtTest{"world"}},
+			out:    new(ExtTestField),
+			wanted: ExtTestField{ExtTest{"hello world"}},
+		},
+
+		{in: Interface{}, out: &Interface{Foo: "bar"}},
+
+		{
+			in:  &InlineTest{OmitEmptyTest: OmitEmptyTest{Bar: "world"}},
+			out: new(InlineTest),
+		}, {
+			in:  &InlinePtrTest{OmitEmptyTest: &OmitEmptyTest{Bar: "world"}},
+			out: new(InlinePtrTest),
+		}, {
+			in:  InlineDupTest{FooTest{"foo"}, FooDupTest{"foo dup"}},
+			out: new(InlineDupTest),
+		},
 	}
 )
 
@@ -417,7 +535,7 @@ func TestTypes(t *testing.T) {
 			continue
 		}
 		if err != nil {
-			t.Fatalf("Marshal failed: %s (in=%#v)", err, test.in)
+			t.Fatalf("Encode failed: %s (in=%#v)", err, test.in)
 		}
 
 		dec := msgpack.NewDecoder(&buf)
@@ -427,7 +545,7 @@ func TestTypes(t *testing.T) {
 			continue
 		}
 		if err != nil {
-			t.Fatalf("Unmarshal failed: %s (%s)", err, test)
+			t.Fatalf("Decode failed: %s (%s)", err, test)
 		}
 
 		if buf.Len() > 0 {
@@ -457,14 +575,73 @@ func TestTypes(t *testing.T) {
 			t.Fatalf("%#v != %#v (%s)", out, wanted, test)
 		}
 	}
-}
 
-func TestStrings(t *testing.T) {
-	for _, n := range []int{0, 1, 31, 32, 255, 256, 65535, 65536} {
-		in := strings.Repeat("x", n)
-		b, err := msgpack.Marshal(in)
+	for _, test := range typeTests {
+		if test.encErr != "" || test.decErr != "" {
+			continue
+		}
+
+		b, err := msgpack.Marshal(test.in)
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		var dst interface{}
+		err = msgpack.Unmarshal(b, &dst)
+		if err != nil {
+			t.Fatalf("Decode failed: %s (%s)", err, test)
+		}
+
+		dec := msgpack.NewDecoder(bytes.NewReader(b))
+		_, err = dec.DecodeInterface()
+		if err != nil {
+			t.Fatalf("Decode failed: %s (%s)", err, test)
+		}
+	}
+}
+
+func TestStringsBin(t *testing.T) {
+	tests := []struct {
+		in     string
+		wanted string
+	}{
+		{"", "a0"},
+		{"a", "a161"},
+		{"hello", "a568656c6c6f"},
+		{
+			strings.Repeat("x", 31),
+			"bf" + strings.Repeat("78", 31),
+		},
+		{
+			strings.Repeat("x", 32),
+			"d920" + strings.Repeat("78", 32),
+		},
+		{
+			strings.Repeat("x", 255),
+			"d9ff" + strings.Repeat("78", 255),
+		},
+		{
+			strings.Repeat("x", 256),
+			"da0100" + strings.Repeat("78", 256),
+		},
+		{
+			strings.Repeat("x", 65535),
+			"daffff" + strings.Repeat("78", 65535),
+		},
+		{
+			strings.Repeat("x", 65536),
+			"db00010000" + strings.Repeat("78", 65536),
+		},
+	}
+
+	for _, test := range tests {
+		b, err := msgpack.Marshal(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(b)
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
 		}
 
 		var out string
@@ -472,9 +649,403 @@ func TestStrings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if out != test.in {
+			t.Fatalf("%s != %s", out, test.in)
+		}
 
-		if out != in {
-			t.Fatalf("%q != %q", out, in)
+		dec := msgpack.NewDecoder(bytes.NewReader(b))
+		v, err := dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.(string) != test.in {
+			t.Fatalf("%s != %s", v, test.in)
+		}
+
+		var dst interface{}
+		dst = ""
+		err = msgpack.Unmarshal(b, &dst)
+		if err.Error() != "msgpack: Decode(nonsettable string)" {
+			t.Fatal(err)
 		}
 	}
+}
+
+func TestBin(t *testing.T) {
+	tests := []struct {
+		in     []byte
+		wanted string
+	}{
+		{[]byte{}, "c400"},
+		{[]byte{0}, "c40100"},
+		{
+			bytes.Repeat([]byte{'x'}, 31),
+			"c41f" + strings.Repeat("78", 31),
+		},
+		{
+			bytes.Repeat([]byte{'x'}, 32),
+			"c420" + strings.Repeat("78", 32),
+		},
+		{
+			bytes.Repeat([]byte{'x'}, 255),
+			"c4ff" + strings.Repeat("78", 255),
+		},
+		{
+			bytes.Repeat([]byte{'x'}, 256),
+			"c50100" + strings.Repeat("78", 256),
+		},
+		{
+			bytes.Repeat([]byte{'x'}, 65535),
+			"c5ffff" + strings.Repeat("78", 65535),
+		},
+		{
+			bytes.Repeat([]byte{'x'}, 65536),
+			"c600010000" + strings.Repeat("78", 65536),
+		},
+	}
+
+	for _, test := range tests {
+		b, err := msgpack.Marshal(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(b)
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
+		}
+
+		var out []byte
+		err = msgpack.Unmarshal(b, &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(out, test.in) {
+			t.Fatalf("%x != %x", out, test.in)
+		}
+
+		dec := msgpack.NewDecoder(bytes.NewReader(b))
+		v, err := dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(v.([]byte), test.in) {
+			t.Fatalf("%x != %x", v, test.in)
+		}
+
+		var dst interface{}
+		dst = make([]byte, 0)
+		err = msgpack.Unmarshal(b, &dst)
+		if err.Error() != "msgpack: Decode(nonsettable []uint8)" {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestUint64(t *testing.T) {
+	tests := []struct {
+		in     uint64
+		wanted string
+	}{
+		{0, "00"},
+		{1, "01"},
+		{math.MaxInt8 - 1, "7e"},
+		{math.MaxInt8, "7f"},
+		{math.MaxInt8 + 1, "cc80"},
+		{math.MaxUint8 - 1, "ccfe"},
+		{math.MaxUint8, "ccff"},
+		{math.MaxUint8 + 1, "cd0100"},
+		{math.MaxUint16 - 1, "cdfffe"},
+		{math.MaxUint16, "cdffff"},
+		{math.MaxUint16 + 1, "ce00010000"},
+		{math.MaxUint32 - 1, "cefffffffe"},
+		{math.MaxUint32, "ceffffffff"},
+		{math.MaxUint32 + 1, "cf0000000100000000"},
+		{math.MaxInt64 - 1, "cf7ffffffffffffffe"},
+		{math.MaxInt64, "cf7fffffffffffffff"},
+	}
+
+	var buf bytes.Buffer
+	enc := msgpack.NewEncoder(&buf).UseCompactEncoding(true)
+
+	for _, test := range tests {
+		err := enc.Encode(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(buf.Bytes())
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
+		}
+
+		var out uint64
+		err = msgpack.Unmarshal(buf.Bytes(), &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out != test.in {
+			t.Fatalf("%d != %d", out, test.in)
+		}
+
+		var out2 int64
+		err = msgpack.Unmarshal(buf.Bytes(), &out2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out2 != int64(test.in) {
+			t.Fatalf("%d != %d", out2, int64(test.in))
+		}
+
+		var out3 interface{}
+		out3 = uint64(0)
+		err = msgpack.Unmarshal(buf.Bytes(), &out3)
+		if err.Error() != "msgpack: Decode(nonsettable uint64)" {
+			t.Fatal(err)
+		}
+
+		dec := msgpack.NewDecoder(&buf)
+		_, err = dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if buf.Len() != 0 {
+			panic("buffer is not empty")
+		}
+	}
+}
+
+func TestInt64(t *testing.T) {
+	tests := []struct {
+		in     int64
+		wanted string
+	}{
+		{math.MinInt64, "d38000000000000000"},
+		{math.MinInt32 - 1, "d3ffffffff7fffffff"},
+		{math.MinInt32, "d280000000"},
+		{math.MinInt32 + 1, "d280000001"},
+		{math.MinInt16 - 1, "d2ffff7fff"},
+		{math.MinInt16, "d18000"},
+		{math.MinInt16 + 1, "d18001"},
+		{math.MinInt8 - 1, "d1ff7f"},
+		{math.MinInt8, "d080"},
+		{math.MinInt8 + 1, "d081"},
+		{-33, "d0df"},
+		{-32, "e0"},
+		{-31, "e1"},
+		{-1, "ff"},
+		{0, "00"},
+		{1, "01"},
+		{math.MaxInt8 - 1, "7e"},
+		{math.MaxInt8, "7f"},
+		{math.MaxInt8 + 1, "cc80"},
+		{math.MaxUint8 - 1, "ccfe"},
+		{math.MaxUint8, "ccff"},
+		{math.MaxUint8 + 1, "cd0100"},
+		{math.MaxUint16 - 1, "cdfffe"},
+		{math.MaxUint16, "cdffff"},
+		{math.MaxUint16 + 1, "ce00010000"},
+		{math.MaxUint32 - 1, "cefffffffe"},
+		{math.MaxUint32, "ceffffffff"},
+		{math.MaxUint32 + 1, "cf0000000100000000"},
+		{math.MaxInt64 - 1, "cf7ffffffffffffffe"},
+		{math.MaxInt64, "cf7fffffffffffffff"},
+	}
+
+	var buf bytes.Buffer
+	enc := msgpack.NewEncoder(&buf).UseCompactEncoding(true)
+
+	for _, test := range tests {
+		err := enc.Encode(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(buf.Bytes())
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
+		}
+
+		var out int64
+		err = msgpack.Unmarshal(buf.Bytes(), &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out != test.in {
+			t.Fatalf("%d != %d", out, test.in)
+		}
+
+		var out2 uint64
+		err = msgpack.Unmarshal(buf.Bytes(), &out2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out2 != uint64(test.in) {
+			t.Fatalf("%d != %d", out2, uint64(test.in))
+		}
+
+		var out3 interface{}
+		out3 = int64(0)
+		err = msgpack.Unmarshal(buf.Bytes(), &out3)
+		if err.Error() != "msgpack: Decode(nonsettable int64)" {
+			t.Fatal(err)
+		}
+
+		dec := msgpack.NewDecoder(&buf)
+		_, err = dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if buf.Len() != 0 {
+			panic("buffer is not empty")
+		}
+	}
+}
+
+func TestFloat32(t *testing.T) {
+	tests := []struct {
+		in     float32
+		wanted string
+	}{
+		{0.1, "ca3dcccccd"},
+		{0.2, "ca3e4ccccd"},
+		{-0.1, "cabdcccccd"},
+		{-0.2, "cabe4ccccd"},
+		{float32(math.Inf(1)), "ca7f800000"},
+		{float32(math.Inf(-1)), "caff800000"},
+		{math.MaxFloat32, "ca7f7fffff"},
+		{math.SmallestNonzeroFloat32, "ca00000001"},
+	}
+	for _, test := range tests {
+		b, err := msgpack.Marshal(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(b)
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
+		}
+
+		var out float32
+		err = msgpack.Unmarshal(b, &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out != test.in {
+			t.Fatalf("%f != %f", out, test.in)
+		}
+
+		var out2 float64
+		err = msgpack.Unmarshal(b, &out2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out2 != float64(test.in) {
+			t.Fatalf("%f != %f", out2, float64(test.in))
+		}
+
+		dec := msgpack.NewDecoder(bytes.NewReader(b))
+		v, err := dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.(float32) != test.in {
+			t.Fatalf("%f != %f", v, test.in)
+		}
+
+		var dst interface{}
+		dst = float32(0)
+		err = msgpack.Unmarshal(b, &dst)
+		if err.Error() != "msgpack: Decode(nonsettable float32)" {
+			t.Fatal(err)
+		}
+	}
+
+	in := float32(math.NaN())
+	b, err := msgpack.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out float32
+	err = msgpack.Unmarshal(b, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !math.IsNaN(float64(out)) {
+		t.Fatal("not NaN")
+	}
+}
+
+func TestFloat64(t *testing.T) {
+	table := []struct {
+		in     float64
+		wanted string
+	}{
+		{0.1, "cb3fb999999999999a"},
+		{0.2, "cb3fc999999999999a"},
+		{-0.1, "cbbfb999999999999a"},
+		{-0.2, "cbbfc999999999999a"},
+		{math.Inf(1), "cb7ff0000000000000"},
+		{math.Inf(-1), "cbfff0000000000000"},
+		{math.MaxFloat64, "cb7fefffffffffffff"},
+		{math.SmallestNonzeroFloat64, "cb0000000000000001"},
+	}
+	for _, test := range table {
+		b, err := msgpack.Marshal(test.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := hex.EncodeToString(b)
+		if s != test.wanted {
+			t.Fatalf("%.32s != %.32s", s, test.wanted)
+		}
+
+		var out float64
+		err = msgpack.Unmarshal(b, &out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out != test.in {
+			t.Fatalf("%f != %f", out, test.in)
+		}
+
+		dec := msgpack.NewDecoder(bytes.NewReader(b))
+		v, err := dec.DecodeInterface()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.(float64) != test.in {
+			t.Fatalf("%f != %f", v, test.in)
+		}
+
+		var dst interface{}
+		dst = float64(0)
+		err = msgpack.Unmarshal(b, &dst)
+		if err.Error() != "msgpack: Decode(nonsettable float64)" {
+			t.Fatal(err)
+		}
+	}
+
+	in := float64(math.NaN())
+	b, err := msgpack.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out float64
+	err = msgpack.Unmarshal(b, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !math.IsNaN(out) {
+		t.Fatal("not NaN")
+	}
+}
+
+func mustParseTime(format, s string) time.Time {
+	tm, err := time.Parse(format, s)
+	if err != nil {
+		panic(err)
+	}
+	return tm
 }

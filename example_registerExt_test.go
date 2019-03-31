@@ -9,7 +9,7 @@ import (
 )
 
 func init() {
-	msgpack.RegisterExt(0, (*EventTime)(nil))
+	msgpack.RegisterExt(1, (*EventTime)(nil))
 }
 
 // https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1#eventtime-ext-format
@@ -48,10 +48,10 @@ func ExampleRegisterExt() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(v.(EventTime).UTC())
+	fmt.Println(v.(*EventTime).UTC())
 
-	var tm EventTime
-	err = msgpack.Unmarshal(b, &tm)
+	tm := new(EventTime)
+	err = msgpack.Unmarshal(b, tm)
 	if err != nil {
 		panic(err)
 	}

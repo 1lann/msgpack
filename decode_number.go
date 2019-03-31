@@ -14,7 +14,7 @@ func (d *Decoder) skipN(n int) error {
 }
 
 func (d *Decoder) uint8() (uint8, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
@@ -77,15 +77,17 @@ func (d *Decoder) int64() (int64, error) {
 	return int64(n), err
 }
 
+// DecodeUint64 decodes msgpack int8/16/32/64 and uint8/16/32/64
+// into Go uint64.
 func (d *Decoder) DecodeUint64() (uint64, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
 	return d.uint(c)
 }
 
-func (d *Decoder) uint(c byte) (uint64, error) {
+func (d *Decoder) uint(c codes.Code) (uint64, error) {
 	if c == codes.Nil {
 		return 0, nil
 	}
@@ -117,15 +119,17 @@ func (d *Decoder) uint(c byte) (uint64, error) {
 	return 0, fmt.Errorf("msgpack: invalid code=%x decoding uint64", c)
 }
 
+// DecodeInt64 decodes msgpack int8/16/32/64 and uint8/16/32/64
+// into Go int64.
 func (d *Decoder) DecodeInt64() (int64, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
 	return d.int(c)
 }
 
-func (d *Decoder) int(c byte) (int64, error) {
+func (d *Decoder) int(c codes.Code) (int64, error) {
 	if c == codes.Nil {
 		return 0, nil
 	}
@@ -159,14 +163,14 @@ func (d *Decoder) int(c byte) (int64, error) {
 }
 
 func (d *Decoder) DecodeFloat32() (float32, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
 	return d.float32(c)
 }
 
-func (d *Decoder) float32(c byte) (float32, error) {
+func (d *Decoder) float32(c codes.Code) (float32, error) {
 	if c == codes.Float {
 		n, err := d.uint32()
 		if err != nil {
@@ -182,15 +186,16 @@ func (d *Decoder) float32(c byte) (float32, error) {
 	return float32(n), nil
 }
 
+// DecodeFloat64 decodes msgpack float32/64 into Go float64.
 func (d *Decoder) DecodeFloat64() (float64, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
 	return d.float64(c)
 }
 
-func (d *Decoder) float64(c byte) (float64, error) {
+func (d *Decoder) float64(c codes.Code) (float64, error) {
 	switch c {
 	case codes.Float:
 		n, err := d.float32(c)
@@ -258,6 +263,9 @@ func decodeFloat32Value(d *Decoder, v reflect.Value) error {
 	if err != nil {
 		return err
 	}
+	if err = mustSet(v); err != nil {
+		return err
+	}
 	v.SetFloat(float64(f))
 	return nil
 }
@@ -265,6 +273,9 @@ func decodeFloat32Value(d *Decoder, v reflect.Value) error {
 func decodeFloat64Value(d *Decoder, v reflect.Value) error {
 	f, err := d.DecodeFloat64()
 	if err != nil {
+		return err
+	}
+	if err = mustSet(v); err != nil {
 		return err
 	}
 	v.SetFloat(f)
@@ -276,6 +287,9 @@ func decodeInt64Value(d *Decoder, v reflect.Value) error {
 	if err != nil {
 		return err
 	}
+	if err = mustSet(v); err != nil {
+		return err
+	}
 	v.SetInt(n)
 	return nil
 }
@@ -283,6 +297,9 @@ func decodeInt64Value(d *Decoder, v reflect.Value) error {
 func decodeUint64Value(d *Decoder, v reflect.Value) error {
 	n, err := d.DecodeUint64()
 	if err != nil {
+		return err
+	}
+	if err = mustSet(v); err != nil {
 		return err
 	}
 	v.SetUint(n)

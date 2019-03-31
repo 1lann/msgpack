@@ -9,7 +9,12 @@ import (
 	"github.com/1lann/msgpack/codes"
 )
 
-var extTypes = make(map[int8]reflect.Type)
+type extInfo struct {
+	Type    reflect.Type
+	Decoder decoderFunc
+}
+
+var extTypes = make(map[int8]extInfo)
 
 var bufferPool = &sync.Pool{
 	New: func() interface{} {
@@ -33,9 +38,8 @@ func RegisterExt(id int8, value interface{}) {
 	if _, ok := extTypes[id]; ok {
 		panic(fmt.Errorf("msgpack: ext with id=%d is already registered", id))
 	}
-	extTypes[id] = typ
 
-	registerExt(id, ptr, getEncoder(ptr), nil)
+	registerExt(id, ptr, getEncoder(ptr), getDecoder(ptr))
 	registerExt(id, typ, getEncoder(typ), getDecoder(typ))
 }
 
@@ -44,8 +48,22 @@ func registerExt(id int8, typ reflect.Type, enc encoderFunc, dec decoderFunc) {
 		typEncMap[typ] = makeExtEncoder(id, enc)
 	}
 	if dec != nil {
-		typDecMap[typ] = dec
+		extTypes[id] = extInfo{
+			Type:    typ,
+			Decoder: dec,
+		}
+		typDecMap[typ] = makeExtDecoder(id, dec)
 	}
+}
+
+func (e *Encoder) EncodeExtHeader(typeId int8, length int) error {
+	if err := e.encodeExtLen(length); err != nil {
+		return err
+	}
+	if err := e.w.WriteByte(byte(typeId)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func makeExtEncoder(typeId int8, enc encoderFunc) encoderFunc {
@@ -63,47 +81,62 @@ func makeExtEncoder(typeId int8, enc encoderFunc) encoderFunc {
 			return err
 		}
 
-		if err := e.encodeExtLen(buf.Len()); err != nil {
-			return err
-		}
-		if err := e.w.WriteByte(byte(typeId)); err != nil {
+		err = e.EncodeExtHeader(typeId, buf.Len())
+		if err != nil {
 			return err
 		}
 		return e.write(buf.Bytes())
 	}
 }
 
+func makeExtDecoder(typeId int8, dec decoderFunc) decoderFunc {
+	return func(d *Decoder, v reflect.Value) error {
+		c, err := d.PeekCode()
+		if err != nil {
+			return err
+		}
+
+		if !codes.IsExt(c) {
+			return dec(d, v)
+		}
+
+		id, extLen, err := d.DecodeExtHeader()
+		if err != nil {
+			return err
+		}
+
+		if int8(id) != typeId {
+			return fmt.Errorf("msgpack: got ext type=%d, wanted %d", int8(id), typeId)
+		}
+
+		d.extLen = extLen
+		return dec(d, v)
+	}
+}
+
 func (e *Encoder) encodeExtLen(l int) error {
 	switch l {
 	case 1:
-		return e.w.WriteByte(codes.FixExt1)
+		return e.writeCode(codes.FixExt1)
 	case 2:
-		return e.w.WriteByte(codes.FixExt2)
+		return e.writeCode(codes.FixExt2)
 	case 4:
-		return e.w.WriteByte(codes.FixExt4)
+		return e.writeCode(codes.FixExt4)
 	case 8:
-		return e.w.WriteByte(codes.FixExt8)
+		return e.writeCode(codes.FixExt8)
 	case 16:
-		return e.w.WriteByte(codes.FixExt16)
+		return e.writeCode(codes.FixExt16)
 	}
 	if l < 256 {
-		return e.write1(codes.Ext8, uint64(l))
+		return e.write1(codes.Ext8, uint8(l))
 	}
 	if l < 65536 {
-		return e.write2(codes.Ext16, uint64(l))
+		return e.write2(codes.Ext16, uint16(l))
 	}
 	return e.write4(codes.Ext32, uint32(l))
 }
 
-func (d *Decoder) decodeExtLen() (int, error) {
-	c, err := d.readByte()
-	if err != nil {
-		return 0, err
-	}
-	return d.parseExtLen(c)
-}
-
-func (d *Decoder) parseExtLen(c byte) (int, error) {
+func (d *Decoder) parseExtLen(c codes.Code) (int, error) {
 	switch c {
 	case codes.FixExt1:
 		return 1, nil
@@ -129,57 +162,68 @@ func (d *Decoder) parseExtLen(c byte) (int, error) {
 	}
 }
 
-func (d *Decoder) decodeExt() (interface{}, error) {
-	c, err := d.readByte()
+func (d *Decoder) decodeExtHeader(c codes.Code) (int8, int, error) {
+	length, err := d.parseExtLen(c)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return d.ext(c)
+
+	typeId, err := d.readCode()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return int8(typeId), length, nil
 }
 
-func (d *Decoder) ext(c byte) (interface{}, error) {
-	extLen, err := d.parseExtLen(c)
+func (d *Decoder) DecodeExtHeader() (typeId int8, length int, err error) {
+	c, err := d.readCode()
+	if err != nil {
+		return
+	}
+	return d.decodeExtHeader(c)
+}
+
+func (d *Decoder) extInterface(c codes.Code) (interface{}, error) {
+	extId, extLen, err := d.decodeExtHeader(c)
 	if err != nil {
 		return nil, err
 	}
-	// Save for later use.
-	d.extLen = extLen
 
-	extId, err := d.readByte()
-	if err != nil {
-		return nil, err
-	}
-
-	typ, ok := extTypes[int8(extId)]
+	info, ok := extTypes[extId]
 	if !ok {
-		return nil, fmt.Errorf("msgpack: unregistered ext id=%d", extId)
+		return nil, fmt.Errorf("msgpack: unknown ext id=%d", extId)
 	}
 
-	v := reflect.New(typ).Elem()
-	if err := d.DecodeValue(v); err != nil {
+	v := reflect.New(info.Type)
+
+	d.extLen = extLen
+	err = info.Decoder(d, v.Elem())
+	d.extLen = 0
+	if err != nil {
 		return nil, err
 	}
 
 	return v.Interface(), nil
 }
 
-func (d *Decoder) skipExt(c byte) error {
+func (d *Decoder) skipExt(c codes.Code) error {
 	n, err := d.parseExtLen(c)
 	if err != nil {
 		return err
 	}
-	return d.skipN(n)
+	return d.skipN(n + 1)
 }
 
-func (d *Decoder) skipExtHeader(c byte) error {
+func (d *Decoder) skipExtHeader(c codes.Code) error {
 	// Read ext type.
-	_, err := d.readByte()
+	_, err := d.readCode()
 	if err != nil {
 		return err
 	}
 	// Read ext body len.
 	for i := 0; i < extHeaderLen(c); i++ {
-		_, err := d.readByte()
+		_, err := d.readCode()
 		if err != nil {
 			return err
 		}
@@ -187,7 +231,7 @@ func (d *Decoder) skipExtHeader(c byte) error {
 	return nil
 }
 
-func extHeaderLen(c byte) int {
+func extHeaderLen(c codes.Code) int {
 	switch c {
 	case codes.Ext8:
 		return 1
