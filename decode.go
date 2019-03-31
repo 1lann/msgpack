@@ -36,6 +36,14 @@ func Unmarshal(data []byte, v interface{}) error {
 	return NewDecoder(bytes.NewReader(data)).Decode(v)
 }
 
+// UnmarshalCompressed decodes the MessagePack-encoded data using the
+// provided key compression map and stores the result in the value pointed to
+// by v.
+func UnmarshalCompressed(compressedToKey func(string) string,
+	data []byte, v ...interface{}) error {
+	return NewCompressedDecoder(compressedToKey, bytes.NewReader(data)).Decode(v)
+}
+
 type Decoder struct {
 	r   io.Reader
 	s   io.ByteScanner
@@ -44,8 +52,9 @@ type Decoder struct {
 	extLen int
 	rec    []byte // accumulates read data if not nil
 
-	useLoose   bool
-	useJSONTag bool
+	useLoose        bool
+	useJSONTag      bool
+	compressedToKey func(string) string
 
 	decodeMapFunc func(*Decoder) (interface{}, error)
 }
@@ -60,6 +69,13 @@ func NewDecoder(r io.Reader) *Decoder {
 		buf: makeBuffer(),
 	}
 	d.resetReader(r)
+	return d
+}
+
+func NewCompressedDecoder(compressedToKey func(string) string,
+	r io.Reader) *Decoder {
+	d := NewDecoder(r)
+	d.compressedToKey = compressedToKey
 	return d
 }
 

@@ -144,7 +144,7 @@ func getFields(typ reflect.Type, useJSONTag bool) *fields {
 	for i := 0; i < numField; i++ {
 		f := typ.Field(i)
 
-		tag := f.Tag.Get("msgpack")
+		tag := f.Tag.Get("cete")
 		if useJSONTag && tag == "" {
 			tag = f.Tag.Get("json")
 		}
