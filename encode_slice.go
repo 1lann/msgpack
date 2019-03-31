@@ -24,30 +24,39 @@ func encodeByteArrayValue(e *Encoder, v reflect.Value) error {
 		return e.write(b)
 	}
 
-	b := make([]byte, v.Len())
-	reflect.Copy(reflect.ValueOf(b), v)
-	return e.write(b)
+	e.buf = grow(e.buf, v.Len())
+	reflect.Copy(reflect.ValueOf(e.buf), v)
+	return e.write(e.buf)
+}
+
+func grow(b []byte, n int) []byte {
+	if cap(b) >= n {
+		return b[:n]
+	}
+	b = b[:cap(b)]
+	b = append(b, make([]byte, n-len(b))...)
+	return b
 }
 
 func (e *Encoder) EncodeBytesLen(l int) error {
 	if l < 256 {
-		return e.write1(codes.Bin8, uint64(l))
+		return e.write1(codes.Bin8, uint8(l))
 	}
 	if l < 65536 {
-		return e.write2(codes.Bin16, uint64(l))
+		return e.write2(codes.Bin16, uint16(l))
 	}
 	return e.write4(codes.Bin32, uint32(l))
 }
 
 func (e *Encoder) encodeStrLen(l int) error {
 	if l < 32 {
-		return e.w.WriteByte(codes.FixedStrLow | uint8(l))
+		return e.writeCode(codes.FixedStrLow | codes.Code(l))
 	}
 	if l < 256 {
-		return e.write1(codes.Str8, uint64(l))
+		return e.write1(codes.Str8, uint8(l))
 	}
 	if l < 65536 {
-		return e.write2(codes.Str16, uint64(l))
+		return e.write2(codes.Str16, uint16(l))
 	}
 	return e.write4(codes.Str32, uint32(l))
 }
@@ -71,10 +80,10 @@ func (e *Encoder) EncodeBytes(v []byte) error {
 
 func (e *Encoder) EncodeArrayLen(l int) error {
 	if l < 16 {
-		return e.w.WriteByte(codes.FixedArrayLow | byte(l))
+		return e.writeCode(codes.FixedArrayLow | codes.Code(l))
 	}
 	if l < 65536 {
-		return e.write2(codes.Array16, uint64(l))
+		return e.write2(codes.Array16, uint16(l))
 	}
 	return e.write4(codes.Array32, uint32(l))
 }

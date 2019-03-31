@@ -28,53 +28,85 @@ func (e *Encoder) EncodeTime(tm time.Time) error {
 }
 
 func (e *Encoder) encodeTime(tm time.Time) []byte {
+	if e.timeBuf == nil {
+		e.timeBuf = make([]byte, 12)
+	}
+
 	secs := uint64(tm.Unix())
 	if secs>>34 == 0 {
 		data := uint64(tm.Nanosecond())<<34 | secs
 		if data&0xffffffff00000000 == 0 {
-			b := make([]byte, 4)
+			b := e.timeBuf[:4]
 			binary.BigEndian.PutUint32(b, uint32(data))
 			return b
 		} else {
-			b := make([]byte, 8)
+			b := e.timeBuf[:8]
 			binary.BigEndian.PutUint64(b, data)
 			return b
 		}
 	}
 
-	b := make([]byte, 12)
+	b := e.timeBuf[:12]
 	binary.BigEndian.PutUint32(b, uint32(tm.Nanosecond()))
 	binary.BigEndian.PutUint64(b[4:], uint64(secs))
 	return b
 }
 
 func (d *Decoder) DecodeTime() (time.Time, error) {
-	c, err := d.readByte()
+	tm, err := d.decodeTime()
 	if err != nil {
-		return time.Time{}, err
+		return tm, err
 	}
 
-	// Legacy format.
-	if c == codes.FixedArrayLow|2 {
-		sec, err := d.DecodeInt64()
+	if tm.IsZero() {
+		// Assume that zero time does not have timezone information.
+		return tm.UTC(), nil
+	}
+	return tm, nil
+}
+
+func (d *Decoder) decodeTime() (time.Time, error) {
+	extLen := d.extLen
+	d.extLen = 0
+	if extLen == 0 {
+		c, err := d.readCode()
 		if err != nil {
 			return time.Time{}, err
 		}
-		nsec, err := d.DecodeInt64()
+
+		// Legacy format.
+		if c == codes.FixedArrayLow|2 {
+			sec, err := d.DecodeInt64()
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			nsec, err := d.DecodeInt64()
+			if err != nil {
+				return time.Time{}, err
+			}
+
+			return time.Unix(sec, nsec), nil
+		}
+
+		if codes.IsString(c) {
+			s, err := d.string(c)
+			if err != nil {
+				return time.Time{}, err
+			}
+			return time.Parse(time.RFC3339Nano, s)
+		}
+
+		extLen, err = d.parseExtLen(c)
 		if err != nil {
 			return time.Time{}, err
 		}
-		return time.Unix(sec, nsec), nil
-	}
 
-	extLen, err := d.parseExtLen(c)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	_, err = d.r.ReadByte()
-	if err != nil {
-		return time.Time{}, nil
+		// Skip ext id.
+		_, err = d.s.ReadByte()
+		if err != nil {
+			return time.Time{}, nil
+		}
 	}
 
 	b, err := d.readN(extLen)
@@ -96,7 +128,8 @@ func (d *Decoder) DecodeTime() (time.Time, error) {
 		sec := binary.BigEndian.Uint64(b[4:])
 		return time.Unix(int64(sec), int64(nsec)), nil
 	default:
-		return time.Time{}, fmt.Errorf("msgpack: invalid ext len=%d decoding time", extLen)
+		err = fmt.Errorf("msgpack: invalid ext len=%d decoding time", extLen)
+		return time.Time{}, err
 	}
 }
 

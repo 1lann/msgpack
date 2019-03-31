@@ -1,6 +1,7 @@
 package msgpack
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -15,14 +16,16 @@ var mapStringStringType = mapStringStringPtrType.Elem()
 var mapStringInterfacePtrType = reflect.TypeOf((*map[string]interface{})(nil))
 var mapStringInterfaceType = mapStringInterfacePtrType.Elem()
 
+var errInvalidCode = errors.New("invalid code")
+
 func decodeMapValue(d *Decoder, v reflect.Value) error {
-	n, err := d.DecodeMapLen()
+	size, err := d.DecodeMapLen()
 	if err != nil {
 		return err
 	}
 
 	typ := v.Type()
-	if n == -1 {
+	if size == -1 {
 		v.Set(reflect.Zero(typ))
 		return nil
 	}
@@ -30,10 +33,19 @@ func decodeMapValue(d *Decoder, v reflect.Value) error {
 	if v.IsNil() {
 		v.Set(reflect.MakeMap(typ))
 	}
+	if size == 0 {
+		return nil
+	}
+
+	return decodeMapValueSize(d, v, size)
+}
+
+func decodeMapValueSize(d *Decoder, v reflect.Value, size int) error {
+	typ := v.Type()
 	keyType := typ.Key()
 	valueType := typ.Elem()
 
-	for i := 0; i < n; i++ {
+	for i := 0; i < size; i++ {
 		mk := reflect.New(keyType).Elem()
 		if err := d.DecodeValue(mk); err != nil {
 			return err
@@ -50,32 +62,9 @@ func decodeMapValue(d *Decoder, v reflect.Value) error {
 	return nil
 }
 
-func decodeMap(d *Decoder) (interface{}, error) {
-	n, err := d.DecodeMapLen()
-	if err != nil {
-		return nil, err
-	}
-	if n == -1 {
-		return nil, nil
-	}
-
-	m := make(map[string]interface{}, min(n, mapElemsAllocLimit))
-	for i := 0; i < n; i++ {
-		mk, err := d.DecodeString()
-		if err != nil {
-			return nil, err
-		}
-		mv, err := d.DecodeInterface()
-		if err != nil {
-			return nil, err
-		}
-		m[mk] = mv
-	}
-	return m, nil
-}
-
+// DecodeMapLen decodes map length. Length is -1 when map is nil.
 func (d *Decoder) DecodeMapLen() (int, error) {
-	c, err := d.readByte()
+	c, err := d.readCode()
 	if err != nil {
 		return 0, err
 	}
@@ -85,16 +74,21 @@ func (d *Decoder) DecodeMapLen() (int, error) {
 			return 0, err
 		}
 
-		c, err = d.readByte()
+		c, err = d.readCode()
 		if err != nil {
 			return 0, err
 		}
 	}
-
 	return d.mapLen(c)
 }
 
-func (d *Decoder) mapLen(c byte) (int, error) {
+func (d *Decoder) mapLen(c codes.Code) (int, error) {
+	size, err := d._mapLen(c)
+	err = expandInvalidCodeMapLenError(c, err)
+	return size, err
+}
+
+func (d *Decoder) _mapLen(c codes.Code) (int, error) {
 	if c == codes.Nil {
 		return -1, nil
 	}
@@ -102,14 +96,21 @@ func (d *Decoder) mapLen(c byte) (int, error) {
 		return int(c & codes.FixedMapMask), nil
 	}
 	if c == codes.Map16 {
-		n, err := d.uint16()
-		return int(n), err
+		size, err := d.uint16()
+		return int(size), err
 	}
 	if c == codes.Map32 {
-		n, err := d.uint32()
-		return int(n), err
+		size, err := d.uint32()
+		return int(size), err
 	}
-	return 0, fmt.Errorf("msgpack: invalid code=%x decoding map length", c)
+	return 0, errInvalidCode
+}
+
+func expandInvalidCodeMapLenError(c codes.Code, err error) error {
+	if err == errInvalidCode {
+		return fmt.Errorf("msgpack: invalid code=%x decoding map length", c)
+	}
+	return err
 }
 
 func decodeMapStringStringValue(d *Decoder, v reflect.Value) error {
@@ -118,22 +119,22 @@ func decodeMapStringStringValue(d *Decoder, v reflect.Value) error {
 }
 
 func (d *Decoder) decodeMapStringStringPtr(ptr *map[string]string) error {
-	n, err := d.DecodeMapLen()
+	size, err := d.DecodeMapLen()
 	if err != nil {
 		return err
 	}
-	if n == -1 {
+	if size == -1 {
 		*ptr = nil
 		return nil
 	}
 
 	m := *ptr
 	if m == nil {
-		*ptr = make(map[string]string, min(n, mapElemsAllocLimit))
+		*ptr = make(map[string]string, min(size, mapElemsAllocLimit))
 		m = *ptr
 	}
 
-	for i := 0; i < n; i++ {
+	for i := 0; i < size; i++ {
 		mk, err := d.DecodeString()
 		if err != nil {
 			return err
@@ -174,7 +175,7 @@ func (d *Decoder) decodeMapStringInterfacePtr(ptr *map[string]interface{}) error
 		if err != nil {
 			return err
 		}
-		mv, err := d.DecodeInterface()
+		mv, err := d.decodeInterfaceCond()
 		if err != nil {
 			return err
 		}
@@ -185,10 +186,74 @@ func (d *Decoder) decodeMapStringInterfacePtr(ptr *map[string]interface{}) error
 }
 
 func (d *Decoder) DecodeMap() (interface{}, error) {
-	return d.decodeMapFunc(d)
+	if d.decodeMapFunc != nil {
+		return d.decodeMapFunc(d)
+	}
+
+	size, err := d.DecodeMapLen()
+	if err != nil {
+		return nil, err
+	}
+	if size == -1 {
+		return nil, nil
+	}
+	if size == 0 {
+		return make(map[string]interface{}), nil
+	}
+
+	code, err := d.PeekCode()
+	if err != nil {
+		return nil, err
+	}
+
+	if codes.IsString(code) || codes.IsBin(code) {
+		return d.decodeMapStringInterfaceSize(size)
+	}
+
+	key, err := d.decodeInterfaceCond()
+	if err != nil {
+		return nil, err
+	}
+
+	value, err := d.decodeInterfaceCond()
+	if err != nil {
+		return nil, err
+	}
+
+	keyType := reflect.TypeOf(key)
+	valueType := reflect.TypeOf(value)
+
+	mapType := reflect.MapOf(keyType, valueType)
+	mapValue := reflect.MakeMap(mapType)
+
+	mapValue.SetMapIndex(reflect.ValueOf(key), reflect.ValueOf(value))
+	size--
+
+	err = decodeMapValueSize(d, mapValue, size)
+	if err != nil {
+		return nil, err
+	}
+
+	return mapValue.Interface(), nil
 }
 
-func (d *Decoder) skipMap(c byte) error {
+func (d *Decoder) decodeMapStringInterfaceSize(size int) (map[string]interface{}, error) {
+	m := make(map[string]interface{}, min(size, mapElemsAllocLimit))
+	for i := 0; i < size; i++ {
+		mk, err := d.DecodeString()
+		if err != nil {
+			return nil, err
+		}
+		mv, err := d.decodeInterfaceCond()
+		if err != nil {
+			return nil, err
+		}
+		m[mk] = mv
+	}
+	return m, nil
+}
+
+func (d *Decoder) skipMap(c codes.Code) error {
 	n, err := d.mapLen(c)
 	if err != nil {
 		return err
@@ -204,36 +269,44 @@ func (d *Decoder) skipMap(c byte) error {
 	return nil
 }
 
-func decodeStructValue(d *Decoder, strct reflect.Value) error {
-	c, err := d.readByte()
+func decodeStructValue(d *Decoder, v reflect.Value) error {
+	c, err := d.readCode()
 	if err != nil {
 		return err
 	}
 
 	var isArray bool
 
-	n, err := d.mapLen(c)
+	n, err := d._mapLen(c)
 	if err != nil {
 		var err2 error
 		n, err2 = d.arrayLen(c)
 		if err2 != nil {
-			return err
+			return expandInvalidCodeMapLenError(c, err)
 		}
 		isArray = true
 	}
 	if n == -1 {
-		strct.Set(reflect.Zero(strct.Type()))
+		if err = mustSet(v); err != nil {
+			return err
+		}
+		v.Set(reflect.Zero(v.Type()))
 		return nil
 	}
 
-	fields := structs.Fields(strct.Type())
+	var fields *fields
+	if d.useJSONTag {
+		fields = jsonStructs.Fields(v.Type())
+	} else {
+		fields = structs.Fields(v.Type())
+	}
 
 	if isArray {
 		for i, f := range fields.List {
 			if i >= n {
 				break
 			}
-			if err := f.DecodeValue(d, strct); err != nil {
+			if err := f.DecodeValue(d, v); err != nil {
 				return err
 			}
 		}
@@ -252,7 +325,7 @@ func decodeStructValue(d *Decoder, strct reflect.Value) error {
 			return err
 		}
 		if f := fields.Table[name]; f != nil {
-			if err := f.DecodeValue(d, strct); err != nil {
+			if err := f.DecodeValue(d, v); err != nil {
 				return err
 			}
 		} else {

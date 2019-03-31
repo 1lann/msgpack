@@ -58,6 +58,8 @@ func ExampleDecoder_SetDecodeMapFunc() {
 	}
 
 	dec := msgpack.NewDecoder(buf)
+
+	// Causes decoder to produce map[string]string instead of map[string]interface{}.
 	dec.SetDecodeMapFunc(func(d *msgpack.Decoder) (interface{}, error) {
 		n, err := d.DecodeMapLen()
 		if err != nil {
@@ -85,8 +87,8 @@ func ExampleDecoder_SetDecodeMapFunc() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(out)
-	// Output: map[hello:world]
+	fmt.Printf("%#v", out)
+	// Output: map[string]string{"hello":"world"}
 }
 
 func ExampleDecoder_Query() {
@@ -158,4 +160,38 @@ func ExampleMarshal_asArray() {
 	}
 	fmt.Println(v)
 	// Output: [foo bar]
+}
+
+func ExampleMarshal_omitEmpty() {
+	type Item struct {
+		Foo string
+		Bar string
+	}
+
+	item := &Item{
+		Foo: "hello",
+	}
+	b, err := msgpack.Marshal(item)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("item: %q\n", b)
+
+	type ItemOmitEmpty struct {
+		_msgpack struct{} `msgpack:",omitempty"`
+		Foo      string
+		Bar      string
+	}
+
+	itemOmitEmpty := &ItemOmitEmpty{
+		Foo: "hello",
+	}
+	b, err = msgpack.Marshal(itemOmitEmpty)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("item2: %q\n", b)
+
+	// Output: item: "\x82\xa3Foo\xa5hello\xa3Bar\xa0"
+	// item2: "\x81\xa3Foo\xa5hello"
 }
